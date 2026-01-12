@@ -1,0 +1,659 @@
+import React, { useEffect, useState, useMemo, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import Papa from "papaparse";
+import dayjs from "dayjs";
+import isBetween from "dayjs/plugin/isBetween";
+import axios from "axios";
+
+import {
+  LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid,
+  PieChart, Pie, Cell, AreaChart, Area, BarChart, Bar, ReferenceLine, LabelList
+} from "recharts";
+
+dayjs.extend(isBetween);
+
+// --- LOGIC CONSTANTS ---
+const CLIENT_PREV_KPIS = {
+  "entfw": {
+    totalPayments: 95000, totalClaims: 9469, gcr: 34.50, ncr: 97.00, denialRate: 0.30,
+    firstPassRate: 80.00, cleanClaimRate: 95.00, totalDenials: 55, totalOpenAR: 320000,
+    GCR_Target: 0.0, GCR_Baseline: 34.5, NCR_Target: 0.0, NCR_Baseline: 97.0,
+    CCR_Target: 0.0, CCR_Baseline: 95.0, FPR_Target: 0.0, FPR_Baseline: 80.0,
+    Denial_Rate_Target: 0.0, Denial_Rate_Baseline: 0.30
+  },
+  "eca": {
+    totalPayments: 120000, totalClaims: 3897, gcr: 47.00, ncr: 98.00, denialRate: 0.23,
+    firstPassRate: 76.50, cleanClaimRate: 96.00, totalDenials: 48, totalOpenAR: 410000,
+    GCR_Target: 0.0, GCR_Baseline: 47.00, NCR_Target: 0.00, NCR_Baseline: 98.0,
+    CCR_Target: 0.0, CCR_Baseline: 96.0, FPR_Target: 0.0, FPR_Baseline: 76.5,
+    Denial_Rate_Target: 0.0, Denial_Rate_Baseline: 0.23
+  },
+  "soundhealth": {
+    totalPayments: 78000, totalClaims: 9367, gcr: 24.00, ncr: 93.00, denialRate: 0.9,
+    firstPassRate: 87.85, cleanClaimRate: 98.00, totalDenials: 62, totalOpenAR: 275000,
+    GCR_Target: 0.0, GCR_Baseline: 24.0, NCR_Target: 0.0, NCR_Baseline: 93.0,
+    CCR_Target: 0.0, CCR_Baseline: 98.0, FPR_Target: 0.0, FPR_Baseline: 87.8,
+    Denial_Rate_Target: 0.0, Denial_Rate_Baseline: 0.9
+  },
+  "piedmont": {
+    totalPayments: 142000, totalClaims: 563, gcr: 46.00, ncr: 85.00, denialRate: 0.05,
+    firstPassRate: 71.30, cleanClaimRate: 93.00, totalDenials: 41, totalOpenAR: 520000,
+    GCR_Target: 0.0, GCR_Baseline: 46.0, NCR_Target: 0.0, NCR_Baseline: 85.0,
+    CCR_Target: 0.0, CCR_Baseline: 93.0, FPR_Target: 0.0, FPR_Baseline: 71.30,
+    Denial_Rate_Target: 0.0, Denial_Rate_Baseline: 0.05
+  },
+  "gce": {
+    totalPayments: 142000, totalClaims: 0, gcr: 0.00, ncr: 0.00, denialRate: 0.00,
+    firstPassRate: 0.00, cleanClaimRate: 0.00, totalDenials: 41, totalOpenAR: 520000,
+    GCR_Target: 0.0, GCR_Baseline: 0.0, NCR_Target: 0.0, NCR_Baseline: 0.0,
+    CCR_Target: 0.0, CCR_Baseline: 0.0, FPR_Target: 0.0, FPR_Baseline: 0.00,
+    Denial_Rate_Target: 0.0, Denial_Rate_Baseline: 0.00
+  },
+  "wha": {
+    totalPayments: 142000, totalClaims: 16531, gcr: 39.10, ncr: 92.00, denialRate: 0.37,
+    firstPassRate: 86.00, cleanClaimRate: 0, totalDenials: 41, totalOpenAR: 520000,
+    GCR_Target: 0.0, GCR_Baseline: 39.10, NCR_Target: 0.0, NCR_Baseline: 92.0,
+    CCR_Target: 0.0, CCR_Baseline: 92.0, FPR_Target: 0.0, FPR_Baseline: 86.0,
+    Denial_Rate_Target: 0.0, Denial_Rate_Baseline: 0.37
+  },
+};
+
+const ZERO_KPIS = {
+  totalPayments: 0, totalClaims: 0, gcr: 0, ncr: 0, denialRate: 0,
+  firstPassRate: 0, cleanClaimRate: 0, totalDenials: 0, totalOpenAR: 0,
+  GCR_Target: 0, GCR_Baseline: 0, NCR_Target: 0, NCR_Baseline: 0,
+  CCR_Target: 0, CCR_Baseline: 0, FPR_Target: 0, FPR_Baseline: 0,
+  Denial_Rate_Target: 0, Denial_Rate_Baseline: 0
+};
+
+const getAveragePrevKPIs = () => {
+  const clients = Object.values(CLIENT_PREV_KPIS);
+  const sum = clients.reduce((acc, c) => ({
+    totalPayments: acc.totalPayments + c.totalPayments,
+    totalClaims: acc.totalClaims + c.totalClaims,
+    gcr: acc.gcr + c.gcr,
+    ncr: acc.ncr + c.ncr,
+    denialRate: acc.denialRate + c.denialRate,
+    firstPassRate: acc.firstPassRate + c.firstPassRate,
+    cleanClaimRate: acc.cleanClaimRate + c.cleanClaimRate,
+    totalDenials: acc.totalDenials + c.totalDenials,
+    totalOpenAR: acc.totalOpenAR + c.totalOpenAR,
+    GCR_Target: acc.GCR_Target + c.GCR_Target,
+    GCR_Baseline: acc.GCR_Baseline + c.GCR_Baseline,
+    NCR_Target: acc.NCR_Target + c.NCR_Target,
+    NCR_Baseline: acc.NCR_Baseline + c.NCR_Baseline,
+    CCR_Target: acc.CCR_Target + c.CCR_Target,
+    CCR_Baseline: acc.CCR_Baseline + c.CCR_Baseline,
+    FPR_Target: acc.FPR_Target + c.FPR_Target,
+    FPR_Baseline: acc.FPR_Baseline + c.FPR_Baseline,
+    Denial_Rate_Target: acc.Denial_Rate_Target + c.Denial_Rate_Target,
+    Denial_Rate_Baseline: acc.Denial_Rate_Baseline + c.Denial_Rate_Baseline,
+  }), { ...ZERO_KPIS });
+  const count = clients.length;
+  const result = {};
+  Object.keys(sum).forEach(key => result[key] = sum[key] / count);
+  return result;
+};
+
+const QUICK_FILTERS = {
+  NONE: "none",
+  DAY_PREV_DAY: "day_prev_day",
+  DAY_LAST_MONTH_SAME_DAY: "day_last_month_same",
+  DAY_LAST_YEAR_SAME_DAY: "day_last_year_same",
+  WEEK_LAST_WEEK: "week_last_week",
+  WEEK_LAST_MONTH_WEEK: "week_last_month",
+  WEEK_LAST_YEAR_WEEK: "week_last_year",
+  MONTH_LAST_MONTH: "month_last_month",
+  MONTH_LAST_YEAR_SAME_MONTH: "month_last_year_same",
+  YEAR_PREV_YEAR_1: "year_prev_1",
+  YEAR_PREV_YEAR_2: "year_prev_2",
+  YEAR_PREV_YEAR_3: "year_prev_3",
+};
+
+const CLIENT_FOLDERS = {
+  entfw: ["entfw"],
+  eca: ["eca"],
+  soundhealth: ["soundhealth"],
+  piedmont: ["piedmont"],
+  wha: ["wha"],
+  gce: ["gce"],
+};
+
+// --- HELPER: Compact Number Formatter ---
+const formatCompactNumber = (number) => {
+  if (number >= 1000000) return (number / 1000000).toFixed(1) + "M";
+  if (number >= 1000) return (number / 1000).toFixed(1) + "K";
+  return number.toString();
+};
+
+// --- GAUGE COMPONENT ---
+const SpeedometerGauge = ({ value, label, max = 100, color = "#2563eb", prefix = "", suffix = "" }) => {
+  const chartData = [
+    { value: Number(value) },
+    { value: Math.max(0, max - Number(value)) },
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
+      <div style={{ height: 100, width: 150, position: "relative" }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={chartData}
+              cx="50%"
+              cy="80%"
+              startAngle={180}
+              endAngle={0}
+              innerRadius={50}
+              outerRadius={65}
+              paddingAngle={0}
+              dataKey="value"
+              stroke="none"
+            >
+              <Cell fill={color} />
+              <Cell fill="#f1f3f4" />
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+        <div style={{ position: "absolute", bottom: "10px", left: "50%", transform: "translateX(-50%)", textAlign: "center" }}>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#111827" }}>
+            {prefix}{value.toLocaleString()}{suffix}
+          </div>
+        </div>
+      </div>
+      <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600", marginTop: "4px" }}>{label}</span>
+    </div>
+  );
+};
+
+function DropdownAvatar() {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+  const navigate = useNavigate();
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+  const handleLogout = () => { navigate("/"); };
+  return (
+    <div style={{ position: "relative" }} ref={menuRef}>
+      <button onClick={() => setOpen((prev) => !prev)} style={{ width: "40px", height: "40px", borderRadius: "50%", background: "linear-gradient(135deg, #2563eb, #1d4ed8)", color: "white", fontWeight: "600", fontSize: "14px", border: "2px solid #fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>J</button>
+      {open && (
+        <div style={{ position: "absolute", top: "48px", right: 0, background: "white", border: "1px solid #e5e7eb", borderRadius: "8px", boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)", minWidth: "160px", zIndex: 1000, overflow: "hidden" }}>
+          <div style={{ padding: "10px 16px", cursor: "pointer", fontSize: "14px", color: "#374151", borderBottom: "1px solid #f3f4f6" }} onClick={() => navigate("/profile")}>Profile</div>
+          <div style={{ padding: "10px 16px", cursor: "pointer", fontSize: "14px", color: "#374151", borderBottom: "1px solid #f3f4f6" }} onClick={() => navigate("/policy")}>Privacy Policy</div>
+          <div style={{ padding: "10px 16px", cursor: "pointer", fontSize: "14px", color: "#ef4444" }} onClick={handleLogout}>Logout</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function calculateAutomationKPIs(data) {
+  if (!Array.isArray(data) || data.length === 0) return { botPA: 0, botCharges: 0, botPP: 0, botAR: 0, fte: 0, botEV: 0 };
+  const totals = data.reduce((acc, row) => {
+    acc.botpe += Number(row.botpe) || 0;
+    acc.botcharge += Number(row.botcharge) || 0;
+    acc.botpp += Number(row.botpp) || 0;
+    acc.botev += Number(row.botev) || 0;
+    acc.botar += Number(row.botar) || 0;
+    acc.totalvolpe += Number(row.totalvolpe) || 0;
+    acc.totalvolcharge += Number(row.totalvolcharge) || 0;
+    acc.totalvolpp += Number(row.totalvolpp) || 0;
+    acc.totalvolev += Number(row.totalvolev) || 0;
+    acc.totalvolar += Number(row.totalvolar) || 0;
+    acc.fte += Number(row.fte) || 0;
+    return acc;
+  }, { botpe: 0, botcharge: 0, botpp: 0, botev: 0, totalvolpe: 0, totalvolcharge: 0, totalvolpp: 0, totalvolev: 0, fte: 0, botar: 0, totalvolar: 0 });
+  return {
+    botPA: totals.totalvolpe ? (totals.botpe / totals.totalvolpe) * 100 : 0,
+    botCharges: totals.totalvolcharge ? (totals.botcharge / totals.totalvolcharge) * 100 : 0,
+    botPP: totals.totalvolpp ? (totals.botpp / totals.totalvolpp) * 100 : 0,
+    botAR: totals.totalvolar ? (totals.botar / totals.totalvolar) * 100 : 0,
+    botEV: totals.totalvolev ? (totals.botev / totals.totalvolev) * 100 : 0,
+    fte: totals.fte,
+  };
+}
+
+const parseCSV = async (filePath) => {
+  try {
+    const res = await fetch(filePath);
+    if (!res.ok) return [];
+    const text = await res.text();
+    return new Promise((resolve, reject) => {
+      Papa.parse(text, {
+        header: true, dynamicTyping: false, skipEmptyLines: true,
+        complete: (results) => {
+          const normalized = results.data.map((r) => {
+            const dos = r.Date_of_Service ? dayjs(r.Date_of_Service) : null;
+            const ced = r.Charge_Entry_Date ? dayjs(r.Charge_Entry_Date) : null;
+            return {
+              ...r,
+              month: r.month || (dos ? dos.format("MMM YY") : (ced ? ced.format("MMM YY") : "")),
+              Billed_Amount: Number(String(r.Billed_Amount || "0").replace(/,/g, "").replace(/"/g, "")),
+              Paid_Amount: Number(String(r.Paid_Amount || "0").replace(/,/g, "").replace(/"/g, "")),
+              Adjustment_Amount: Number(String(r.Adjustment_Amount || "0").replace(/,/g, "").replace(/"/g, "")),
+              Open_AR_Amount: Number(String(r.Open_AR_Amount || r.apenaramount || "0").replace(/,/g, "").replace(/"/g, "")),
+              Is_First_Pass_Resolution: ["true", "yes", "y", "1"].includes(String(r.Is_First_Pass_Resolution || r.First_Pass || "").toLowerCase().trim()),
+              Is_Clean_Claim: Number(r.Is_Clean_Claim || 0),
+              aging: Number(r.aging || 0),
+              Aging_Amount: Number(r.Aging_Amount || "0"),
+              ar_days: Number(r.ar_days || 0),
+              visit: Number(r.visit || 0),
+              ts_dos: dos ? dos.valueOf() : 0,
+              ts_ced: ced ? ced.valueOf() : 0
+            };
+          });
+          resolve(normalized);
+        },
+        error: (error) => reject(error)
+      });
+    });
+  } catch (error) { return []; }
+};
+
+// --- MAIN DASHBOARD COMPONENT ---
+export default function Dashboard() {
+  const [charges, setCharges] = useState([]);
+  const [denials, setDenials] = useState([]);
+  const [openAR, setOpenAR] = useState([]);
+  const [ncrData, setNcrData] = useState([]);
+  const [aiBotOpen, setAiBotOpen] = useState(false);
+  const [agingData, setAgingData] = useState([]);
+  const [automationData, setAutomationData] = useState([]);
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [startDate, setStartDate] = useState(dayjs().subtract(3, "month").format("YYYY-MM-DD"));
+  const [endDate, setEndDate] = useState(dayjs().format("YYYY-MM-DD"));
+  const [quickFilter, setQuickFilter] = useState(QUICK_FILTERS.NONE);
+  const [selectedMetric, setSelectedMetric] = useState("GCR");
+  const [selectedClient, setSelectedClient] = useState("gce");
+  const [uploadError, setUploadError] = useState('');
+  const [isUploadedData, setIsUploadedData] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const getClientPaths = (client) => {
+    const folders = CLIENT_FOLDERS[client] || [];
+    return folders.flatMap(folder => [
+      `/${folder}/charges.csv`, `/${folder}/denial.csv`, `/${folder}/openar.csv`, `/${folder}/aging.csv`, `/${folder}/ncrdata.csv`, `/${folder}/automation.csv`
+    ]);
+  };
+
+  useEffect(() => {
+    if (quickFilter === QUICK_FILTERS.NONE) {
+      const lastDayOfLastMonth = dayjs().subtract(2, 'month').endOf('month');
+      const startOfThreeMonthsAgo = lastDayOfLastMonth.subtract(2, 'month').startOf('month');
+      setStartDate(startOfThreeMonthsAgo.format("YYYY-MM-DD"));
+      setEndDate(lastDayOfLastMonth.format("YYYY-MM-DD"));
+      return;
+    }
+    const today = dayjs();
+    let start, end;
+    switch (quickFilter) {
+      case QUICK_FILTERS.DAY_PREV_DAY: start = today.subtract(1, "day"); end = today.subtract(1, "day"); break;
+      case QUICK_FILTERS.MONTH_LAST_MONTH: start = today.subtract(1, "month").startOf("month"); end = today.subtract(1, "month").endOf("month"); break;
+      case QUICK_FILTERS.YEAR_PREV_YEAR_1: start = today.startOf("year"); end = today.endOf("year"); break;
+      default: return;
+    }
+    setStartDate(start.format("YYYY-MM-DD"));
+    setEndDate(end.format("YYYY-MM-DD"));
+  }, [quickFilter]);
+
+  useEffect(() => {
+    setIsUploadedData(false);
+    const loadData = async () => {
+      try {
+        const paths = getClientPaths(selectedClient);
+        const filePromises = paths.map(path => parseCSV(path));
+        const allData = await Promise.all(filePromises);
+        let c = [], d = [], o = [], ag = [], n = [], au = [];
+        paths.forEach((path, index) => {
+          const data = allData[index] || [];
+          if (path.includes("charges.csv")) c = [...c, ...data];
+          else if (path.includes("denial.csv")) d = [...d, ...data];
+          else if (path.includes("openar.csv")) o = [...o, ...data];
+          else if (path.includes("aging.csv")) ag = [...ag, ...data];
+          else if (path.includes("ncrdata.csv")) n = [...n, ...data];
+          else if (path.includes("automation.csv")) au = [...au, ...data];
+        });
+        setCharges(c); setDenials(d); setOpenAR(o); setAgingData(ag); setNcrData(n); setAutomationData(au);
+      } catch (err) { console.error(err); }
+    };
+    loadData();
+  }, [selectedClient]);
+
+  const filteredAutomation = useMemo(() => {
+    if (!selectedMonth) return automationData;
+    return automationData.filter((row) => row.Month === selectedMonth);
+  }, [automationData, selectedMonth]);
+
+  const { filteredCharges, filteredDenials, filteredOpenAR, filteredNCR, prevCharges, prevDenials, prevOpenAR, prevNCR } = useMemo(() => {
+    const startTs = dayjs(startDate).valueOf();
+    const endTs = dayjs(endDate).valueOf();
+    const duration = dayjs(endDate).diff(dayjs(startDate), 'day') + 1;
+    const pStartTs = dayjs(startDate).subtract(duration, 'day').valueOf();
+    const pEndTs = dayjs(startDate).subtract(1, 'day').valueOf();
+
+    const f = (arr, start, end, key) => arr.filter(r => r[key] >= start && r[key] <= end);
+
+    return {
+      filteredCharges: f(charges, startTs, endTs, "ts_ced"),
+      prevCharges: f(charges, pStartTs, pEndTs, "ts_ced"),
+      filteredDenials: f(denials, startTs, endTs, "ts_dos"),
+      prevDenials: f(denials, pStartTs, pEndTs, "ts_dos"),
+      filteredOpenAR: f(openAR, startTs, endTs, "ts_dos"),
+      prevOpenAR: f(openAR, pStartTs, pEndTs, "ts_dos"),
+      filteredNCR: f(ncrData, startTs, endTs, "ts_ced"),
+      prevNCR: f(ncrData, pStartTs, pEndTs, "ts_ced"),
+    };
+  }, [charges, denials, openAR, ncrData, startDate, endDate]);
+
+  const calculateKPIs = (c, d, o, n) => {
+    const pay = c.reduce((s, r) => s + (r.Paid_Amount || 0), 0);
+    const bill = c.reduce((s, r) => s + (r.Billed_Amount || 0), 0);
+    const claims = c.reduce((s, r) => s + Number(r.visit || 0), 0);
+    const denCount = d.filter(r => (r.Claim_Status || "").toLowerCase().trim() === "denied").length;
+    const fpCount = d.filter(r => r.Is_First_Pass_Resolution).length;
+    const ccrVals = c.map(r => Number(r.Is_Clean_Claim || 0));
+    
+    const nPay = n.reduce((s, r) => s + (r.Paid_Amount || 0), 0);
+    const nNet = n.reduce((s, r) => s + (r.Billed_Amount || 0) - (r.Adjustment_Amount || 0), 0);
+
+    return {
+      totalPayments: pay, totalClaims: claims,
+      gcr: bill > 0 ? (pay / bill) * 100 : 0,
+      ncr: nNet > 0 ? (nPay / nNet) * 100 : 0,
+      denialRate: d.length > 0 ? (denCount / d.length) * 100 : 0,
+      firstPassRate: d.length > 0 ? (fpCount / d.length) * 100 : 0,
+      cleanClaimRate: ccrVals.length > 0 ? ccrVals.reduce((a, b) => a + b, 0) / ccrVals.length : 0,
+      totalOpenAR: o.reduce((s, r) => s + (r.Open_AR_Amount || 0), 0)
+    };
+  };
+
+  const currentKPIs = calculateKPIs(filteredCharges, filteredDenials, filteredOpenAR, filteredNCR);
+  const currentAutomationKPIs = useMemo(() => calculateAutomationKPIs(filteredAutomation), [filteredAutomation]);
+  
+  const prevKPIs = isUploadedData ? ZERO_KPIS : (selectedClient === "all" ? getAveragePrevKPIs() : (CLIENT_PREV_KPIS[selectedClient] || ZERO_KPIS));
+
+  const trend = (cur, prev, isGoodInc = true) => {
+    const diff = cur - prev;
+    return {
+      percentChange: Math.abs(diff).toFixed(2),
+      arrow: diff >= 0 ? "▲" : "▼",
+      color: (diff >= 0) === isGoodInc ? "#10b981" : "#ef4444",
+      previousValue: prev.toFixed(2),
+      isPositive: diff >= 0
+    };
+  };
+
+  const kpisWithTrend = {
+    gcr: trend(currentKPIs.gcr, prevKPIs.gcr),
+    ncr: trend(currentKPIs.ncr, prevKPIs.ncr),
+    denialRate: trend(currentKPIs.denialRate, prevKPIs.denialRate, false),
+    firstPassRate: trend(currentKPIs.firstPassRate, prevKPIs.firstPassRate),
+    cleanClaimRate: trend(currentKPIs.cleanClaimRate, prevKPIs.cleanClaimRate),
+    totalClaims: trend(currentKPIs.totalClaims, prevKPIs.totalClaims),
+  };
+
+  const kpiSparklines = useMemo(() => {
+    const group = (arr, fn) => Object.values(arr.reduce((acc, r) => {
+      const m = r.month || "Unknown";
+      if (!acc[m]) acc[m] = { vals: [], m };
+      acc[m].vals.push(r);
+      return acc;
+    }, {})).map(d => ({ value: fn(d.vals), month: d.m }));
+
+    return {
+      gcr: group(filteredCharges, rows => {
+        const p = rows.reduce((a, r) => a + (r.Paid_Amount || 0), 0);
+        const b = rows.reduce((a, r) => a + (r.Billed_Amount || 0), 0);
+        return b > 0 ? (p / b) * 100 : 0;
+      }),
+      ncr: group(filteredNCR, rows => {
+        const p = rows.reduce((a, r) => a + (r.Paid_Amount || 0), 0);
+        const net = rows.reduce((a, r) => a + (r.Billed_Amount || 0) - (r.Adjustment_Amount || 0), 0);
+        return net > 0 ? (p / net) * 100 : 0;
+      }),
+      denialRate: group(filteredDenials, rows => {
+        const d = rows.filter(r => (r.Claim_Status || "").toLowerCase() === "denied").length;
+        return rows.length > 0 ? (d / rows.length) * 100 : 0;
+      }),
+      firstPassRate: group(filteredDenials, rows => {
+        const f = rows.filter(r => r.Is_First_Pass_Resolution).length;
+        return rows.length > 0 ? (f / rows.length) * 100 : 0;
+      }),
+      cleanClaimRate: group(filteredCharges, rows => {
+        const v = rows.map(r => r.Is_Clean_Claim);
+        return v.length > 0 ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+      }),
+      totalClaims: group(filteredCharges, rows => rows.reduce((s, r) => s + Number(r.visit || 0), 0)),
+    };
+  }, [filteredCharges, filteredDenials, filteredNCR]);
+
+  const mainChartData = useMemo(() => {
+    const map = {};
+    const months = Array.from(new Set([...filteredCharges, ...filteredNCR, ...filteredDenials].map(r => r.month)));
+    return months.map(m => {
+      const cRows = filteredCharges.filter(r => r.month === m);
+      const nRows = filteredNCR.filter(r => r.month === m);
+      const dRows = filteredDenials.filter(r => r.month === m);
+      const k = calculateKPIs(cRows, dRows, [], nRows);
+      let avg = 0;
+      if (selectedMetric === "GCR") avg = k.gcr;
+      else if (selectedMetric === "NCR") avg = k.ncr;
+      else if (selectedMetric === "CCR") avg = k.cleanClaimRate;
+      else if (selectedMetric === "FPR") avg = k.firstPassRate;
+      else if (selectedMetric === "Denial Rate") avg = k.denialRate;
+      return { month: m, Avg: avg, Baseline: prevKPIs[`${selectedMetric.replace(" ", "_")}_Baseline`] || 0 };
+    }).sort((a, b) => dayjs(a.month, "MMM YY").unix() - dayjs(b.month, "MMM YY").unix());
+  }, [filteredCharges, filteredNCR, filteredDenials, selectedMetric, prevKPIs]);
+
+  const arAgingPieData = useMemo(() => {
+    const buckets = { "0-30 Days": 0, "31-60 Days": 0, "61-90 Days": 0, "90+ Days": 0 };
+    const targetMonth = dayjs(endDate).format("MMM YY");
+    agingData.filter(r => r.month === targetMonth).forEach(r => {
+      if (r.aging <= 30) buckets["0-30 Days"] += r.Aging_Amount;
+      else if (r.aging <= 60) buckets["31-60 Days"] += r.Aging_Amount;
+      else if (r.aging <= 90) buckets["61-90 Days"] += r.Aging_Amount;
+      else buckets["90+ Days"] += r.Aging_Amount;
+    });
+    const total = Object.values(buckets).reduce((a, b) => a + b, 0);
+    return Object.entries(buckets).map(([name, val]) => ({ name, value: total > 0 ? (val / total) * 100 : 0, rawAmount: val }));
+  }, [agingData, endDate]);
+
+  const chargeLag = useMemo(() => {
+    const d = filteredCharges.map(r => dayjs(r.Charge_Entry_Date).diff(dayjs(r.Date_of_Service), 'day')).filter(v => !isNaN(v));
+    return d.length ? Math.round(d.reduce((a, b) => a + b, 0) / d.length) : 0;
+  }, [filteredCharges]);
+
+  const billingLag = useMemo(() => {
+    const d = filteredDenials.map(r => dayjs(r.Claim_Submission_Date).diff(dayjs(r.Date_of_Service), 'day')).filter(v => !isNaN(v));
+    return d.length ? Math.round(d.reduce((a, b) => a + b, 0) / d.length) : 0;
+  }, [filteredDenials]);
+
+  const avgArDays = useMemo(() => {
+    const d = filteredOpenAR.map(r => Number(r.ar_days || 0)).filter(v => !isNaN(v));
+    return d.length ? Math.round(d.reduce((a, b) => a + b, 0) / d.length) : 0;
+  }, [filteredOpenAR]);
+
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length !== 5) {
+      setUploadError("Please select 5 files: Charges, Denials, OpenAR, Aging, and NCR Data.");
+      return;
+    }
+    setUploadError("");
+    const process = (file) => new Promise(res => Papa.parse(file, { header: true, complete: (results) => res({ name: file.name.toLowerCase(), data: results.data }) }));
+    try {
+      const results = await Promise.all(files.map(process));
+      results.forEach(({ name, data }) => {
+        const normalized = data.map(r => ({ ...r, Paid_Amount: Number(r.Paid_Amount || 0), Billed_Amount: Number(r.Billed_Amount || 0), ts_ced: dayjs(r.Charge_Entry_Date).valueOf(), ts_dos: dayjs(r.Date_of_Service).valueOf() }));
+        if (name.includes("charge")) setCharges(normalized);
+        else if (name.includes("denial")) setDenials(normalized);
+        else if (name.includes("openar")) setOpenAR(normalized);
+        else if (name.includes("aging")) setAgingData(normalized);
+        else if (name.includes("ncr")) setNcrData(normalized);
+      });
+      setIsUploadedData(true);
+    } catch (err) { setUploadError("Error processing files."); }
+  };
+
+  const styles = {
+    container: { fontFamily: "'Inter', sans-serif", backgroundColor: "#f9fafb", minHeight: "100vh" },
+    stickyHeader: { position: "sticky", top: 0, zIndex: 50, backgroundColor: "#fff", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e5e7eb" },
+    gridContainer: { padding: "20px", maxWidth: "1600px", margin: "0 auto", display: "grid", gap: "16px" },
+    card: { backgroundColor: "#fff", borderRadius: "12px", border: "1px solid #e5e7eb", padding: "20px", display: "flex", flexDirection: "column" },
+    kpiTitle: { fontSize: "13px", fontWeight: "600", color: "#6b7280" },
+    kpiValue: { fontSize: "28px", fontWeight: "800", color: "#111827" },
+    trendBadge: (color) => ({ padding: "2px 8px", borderRadius: "99px", fontSize: "11px", fontWeight: "600", backgroundColor: `${color}15`, color }),
+    input: { padding: "8px 12px", borderRadius: "8px", border: "1px solid #d1d5db", fontSize: "14px" },
+    uploadBtn: { padding: "8px 16px", borderRadius: "8px", border: "none", background: "#2563eb", color: "#fff", fontWeight: 600, cursor: "pointer" },
+    sectionTitle: { fontSize: "15px", fontWeight: "700", color: "#1f2937", marginBottom: "16px" },
+    tabGroup: { display: "flex", backgroundColor: "#f3f4f6", padding: "3px", borderRadius: "6px" },
+    tabBtn: (active) => ({ padding: "4px 12px", borderRadius: "4px", border: "none", background: active ? "#fff" : "transparent", fontWeight: active ? "600" : "500", cursor: "pointer" }),
+    floatingBotBtn: { position: "fixed", bottom: 24, right: 24, width: 56, height: 56, borderRadius: "50%", background: "#2563eb", color: "#fff", fontSize: "24px", border: "none", cursor: "pointer", zIndex: 1000 }
+  };
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.stickyHeader}>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "20px", color: "#1e3a8a" }}>Dashboard</h2>
+            <p style={{ margin: 0, fontSize: "13px", color: "#6b7280" }}>Revenue Cycle Management Optimization</p>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={styles.input} />
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={styles.input} />
+          <select value={selectedClient} onChange={e => setSelectedClient(e.target.value)} style={styles.input}>
+            <option value="eca">ECA</option>
+            <option value="piedmont">ECA Piedmont</option>
+            <option value="entfw">ENTFW</option>
+            <option value="soundhealth">Sound Health</option>
+            <option value="wha">WHA</option>
+            <option value="gce">Gulf Coast Eye</option>
+          </select>
+          <button onClick={() => fileInputRef.current.click()} style={styles.uploadBtn}>Upload CSVs</button>
+          <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: "none" }} />
+          <DropdownAvatar />
+        </div>
+      </div>
+
+      <div style={styles.gridContainer}>
+        {/* KPI Row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
+          {[
+            { title: "Gross Collection Rate", val: currentKPIs.gcr, trend: kpisWithTrend.gcr, spark: kpiSparklines.gcr, suffix: "%" },
+            { title: "Net Collection Rate", val: currentKPIs.ncr, trend: kpisWithTrend.ncr, spark: kpiSparklines.ncr, suffix: "%" },
+            { title: "Denial Rate", val: currentKPIs.denialRate, trend: kpisWithTrend.denialRate, spark: kpiSparklines.denialRate, suffix: "%" },
+            { title: "First Pass Rate", val: currentKPIs.firstPassRate, trend: kpisWithTrend.firstPassRate, spark: kpiSparklines.firstPassRate, suffix: "%" },
+            { title: "Clean Claim Rate", val: currentKPIs.cleanClaimRate, trend: kpisWithTrend.cleanClaimRate, spark: kpiSparklines.cleanClaimRate, suffix: "%" },
+            { title: "Total Claims", val: currentKPIs.totalClaims, trend: kpisWithTrend.totalClaims, spark: kpiSparklines.totalClaims, suffix: "" },
+          ].map((k, i) => (
+            <div key={i} style={styles.card}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={styles.kpiTitle}>{k.title}</span>
+                <span style={styles.trendBadge(k.trend.color)}>{k.trend.arrow} {k.trend.percentChange}%</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: "8px" }}>
+                <span style={styles.kpiValue}>{k.val.toFixed(k.suffix === "%" ? 2 : 0)}{k.suffix}</span>
+                <div style={{ width: 60, height: 30 }}>
+                  <ResponsiveContainer>
+                    <AreaChart data={k.spark}>
+                      <Area type="monotone" dataKey="value" stroke={k.trend.color} fill={`${k.trend.color}20`} strokeWidth={2} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <h3 style={styles.sectionTitle}>Operational Efficiency Gauges</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
+          <div style={styles.card}><SpeedometerGauge value={currentKPIs.totalPayments} max={Math.max(200000, currentKPIs.totalPayments)} label="Total Payments" color="#10b981" prefix="$" /></div>
+          <div style={styles.card}><SpeedometerGauge value={chargeLag} max={60} label="Charge Lag (Days)" color="#3b82f6" suffix=" d" /></div>
+          <div style={styles.card}><SpeedometerGauge value={billingLag} max={60} label="Billing Lag (Days)" color="#8b5cf6" suffix=" d" /></div>
+          <div style={styles.card}><SpeedometerGauge value={avgArDays} max={120} label="AR Days" color="#f59e0b" suffix=" d" /></div>
+        </div>
+
+        {/* Automation Row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
+          {[
+            { title: "Prior Auth Automation", val: currentAutomationKPIs.botPA },
+            { title: "Charges Automation", val: currentAutomationKPIs.botCharges },
+            { title: "Payment Posting Automation", val: currentAutomationKPIs.botPP },
+            { title: "AR Automation", val: currentAutomationKPIs.botAR },
+            { title: "EV Automation", val: currentAutomationKPIs.botEV },
+            { title: "FTE", val: currentAutomationKPIs.fte, noPct: true },
+          ].map((c, i) => (
+            <div key={i} style={styles.card}>
+              <span style={styles.kpiTitle}>{c.title}</span>
+              <div style={{ fontSize: "24px", fontWeight: 700, margin: "8px 0" }}>{c.val.toFixed(1)}{c.noPct ? "" : "%"}</div>
+              {!c.noPct && (
+                <div style={{ height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${c.val}%`, background: "linear-gradient(90deg, #10b9b0, #058c96)" }} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Charts Row */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "16px" }}>
+          <div style={styles.card}>
+            <span style={styles.kpiTitle}>AR Aging Buckets</span>
+            <div style={{ height: 250 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={arAgingPieData} innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                    {arAgingPieData.map((e, i) => <Cell key={i} fill={["#3b82f6", "#10b981", "#f59e0b", "#ef4444"][i % 4]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => `${v.toFixed(1)}%`} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div style={styles.card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={styles.sectionTitle}>Performance Trends</span>
+              <div style={styles.tabGroup}>
+                {["GCR", "NCR", "Denial Rate", "CCR", "FPR"].map(m => (
+                  <button key={m} onClick={() => setSelectedMetric(m)} style={styles.tabBtn(selectedMetric === m)}>{m}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ height: 250 }}>
+              <ResponsiveContainer>
+                <LineChart data={mainChartData}>
+                  <CartesianGrid vertical={false} stroke="#f3f4f6" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${v}%`} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="Avg" stroke="#0ea5e9" strokeWidth={3} dot={{ r: 4 }} />
+                  <Line type="monotone" dataKey="Baseline" stroke="#8b5cf6" strokeDasharray="5 5" dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button style={styles.floatingBotBtn} onClick={() => setAiBotOpen(true)}>🤖</button>
+      {aiBotOpen && (
+        <div style={{ position: "fixed", bottom: 90, right: 24, width: 350, height: 450, background: "#fff", borderRadius: 12, boxShadow: "0 10px 25px rgba(0,0,0,0.2)", zIndex: 1100, display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: 16, background: "#2563eb", color: "#fff", borderTopLeftRadius: 12, borderTopRightRadius: 12, display: "flex", justifyContent: "space-between" }}>
+            <span>Jorie AI</span>
+            <button onClick={() => setAiBotOpen(false)} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer" }}>✕</button>
+          </div>
+          <div style={{ flex: 1, padding: 16, overflowY: "auto" }}>
+            <p style={{ fontSize: "14px", color: "#6b7280" }}>How can I help you with your revenue cycle data today?</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
