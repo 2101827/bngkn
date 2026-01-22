@@ -1,0 +1,247 @@
+Here is the complete and corrected code. I have simplified the data loading and KPI calculation logic to remove unnecessary mapping variables while strictly adhering to your requirement: GCR pulls from "Posted Date" files and NCR pulls from "Service Date" files.
+import React, { useEffect, useState, useMemo, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import Papa from "papaparse";
+import dayjs from "dayjs";
+import isBetween from "dayjs/plugin/isBetween";
+import axios from "axios";
+
+import {
+  LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid,
+  PieChart, Pie, Cell, AreaChart, Area, BarChart, Bar, ReferenceLine, LabelList
+} from "recharts";
+
+// --- LOGIC CONSTANTS ---
+const CLIENT_PREV_KPIS = {
+  "entfw": { totalPayments: 95000, gcr: 34.5, ncr: 97.0, denialRate: 0.30, GCR_Baseline: 34.5, NCR_Baseline: 97.0 },
+  "eca": { totalPayments: 120000, gcr: 47.0, ncr: 98.0, denialRate: 0.23, GCR_Baseline: 47.0, NCR_Baseline: 98.0 },
+  "soundhealth": { totalPayments: 78000, gcr: 24.0, ncr: 93.0, denialRate: 0.9, GCR_Baseline: 24.0, NCR_Baseline: 93.0 },
+  "piedmont": { totalPayments: 142000, gcr: 46.0, ncr: 85.0, denialRate: 0.05, GCR_Baseline: 46.0, NCR_Baseline: 85.0 },
+  "wha": { totalPayments: 142000, gcr: 39.1, ncr: 92.0, denialRate: 0.37, GCR_Baseline: 39.1, NCR_Baseline: 92.0 },
+  "southtexas": { GCR_Baseline: 35.0, NCR_Baseline: 95.0 }
+};
+
+const CLIENT_FOLDERS = {
+  entfw: ["entfw"], eca: ["eca"], soundhealth: ["soundhealth"],
+  piedmont: ["piedmont"], wha: ["wha"], gce: ["gce"], southtexas: ["southtexas"]
+};
+
+dayjs.extend(isBetween);
+
+const formatCompactNumber = (number) => {
+  if (number >= 1000000) return (number / 1000000).toFixed(1) + "M";
+  if (number >= 1000) return (number / 1000).toFixed(1) + "K";
+  return number.toString();
+};
+
+const SpeedometerGauge = ({ value, label, max = 100, color = "#2563eb", suffix = "" }) => {
+  const chartData = [{ value: Number(value) }, { value: Math.max(0, max - Number(value)) }];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
+      <div style={{ height: 100, width: 150, position: "relative" }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={chartData} cx="50%" cy="80%" startAngle={180} endAngle={0} innerRadius={50} outerRadius={65} dataKey="value" stroke="none">
+              <Cell fill={color} /><Cell fill="#f1f3f4" />
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+        <div style={{ position: "absolute", bottom: "10px", left: "50%", transform: "translateX(-50%)", textAlign: "center" }}>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#111827" }}>{value}{suffix}</div>
+        </div>
+      </div>
+      <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600", marginTop: "4px" }}>{label}</span>
+    </div>
+  );
+};
+
+function DropdownAvatar() {
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(!open)} style={{ width: "40px", height: "40px", borderRadius: "50%", background: "#2563eb", color: "white", cursor: "pointer", border: "none" }}>J</button>
+      {open && (
+        <div style={{ position: "absolute", top: "48px", right: 0, background: "white", border: "1px solid #e5e7eb", borderRadius: "8px", boxShadow: "0 4px 6px rgba(0,0,0,0.1)", zIndex: 1000 }}>
+          <div style={{ padding: "10px 16px", cursor: "pointer" }} onClick={() => navigate("/")}>Logout</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const parseCSV = async (filePath) => {
+  try {
+    const res = await fetch(filePath);
+    const text = await res.text();
+    return new Promise((resolve) => {
+      Papa.parse(text, {
+        header: true, skipEmptyLines: true,
+        complete: (results) => {
+          resolve(results.data.map((r) => {
+            const ced = r.Charge_Entry_Date ? dayjs(r.Charge_Entry_Date) : null;
+            const dos = r.Date_of_Service ? dayjs(r.Date_of_Service) : null;
+            return {
+              ...r,
+              month: r.month || (ced ? ced.format("MMM YY") : (dos ? dos.format("MMM YY") : "")),
+              Billed_Amount: Number(String(r.Billed_Amount || "0").replace(/[^0-9.-]+/g, "")),
+              Paid_Amount: Number(String(r.Paid_Amount || "0").replace(/[^0-9.-]+/g, "")),
+              Adjustment_Amount: Number(String(r.Adjustment_Amount || "0").replace(/[^0-9.-]+/g, "")),
+              visit: Number(r.visit || 0), ts_dos: dos ? dos.valueOf() : 0, ts_ced: ced ? ced.valueOf() : 0
+            };
+          }));
+        }
+      });
+    });
+  } catch { return []; }
+};
+
+export default function Dashboard() {
+  const [chargesPD, setChargesPD] = useState([]);      
+  const [paymentsPD, setPaymentsPD] = useState([]);    
+  const [chargesSD, setChargesSD] = useState([]);      
+  const [paymentsSD, setPaymentsSD] = useState([]);    
+  const [adjustmentsSD, setAdjustmentsSD] = useState([]);
+  const [denials, setDenials] = useState([]);
+  const [openAR, setOpenAR] = useState([]);
+  const [agingData, setAgingData] = useState([]);
+  const [automationData, setAutomationData] = useState([]);
+
+  const [startDate, setStartDate] = useState(dayjs().subtract(3, "month").format("YYYY-MM-DD"));
+  const [endDate, setEndDate] = useState(dayjs().format("YYYY-MM-DD"));
+  const [selectedMetric, setSelectedMetric] = useState("GCR");
+  const [selectedClient, setSelectedClient] = useState("southtexas");
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const load = async () => {
+      const f = CLIENT_FOLDERS[selectedClient][0];
+      const paths = [
+        `/${f}/chargebypostdate.csv`, `/${f}/paymentbypostdate.csv`, 
+        `/${f}/chargebyservicedate.csv`, `/${f}/paymentbyservicedate.csv`, `/${f}/adjustmentbyservicedate.csv`,
+        `/${f}/denial.csv`, `/${f}/openar.csv`, `/${f}/aging.csv`, `/${f}/automation.csv`
+      ];
+      const res = await Promise.all(paths.map(p => parseCSV(p)));
+      setChargesPD(res[0]); setPaymentsPD(res[1]); setChargesSD(res[2]); 
+      setPaymentsSD(res[3]); setAdjustmentsSD(res[4]); setDenials(res[5]);
+      setOpenAR(res[6]); setAgingData(res[7]); setAutomationData(res[8]);
+    };
+    load();
+  }, [selectedClient]);
+
+  const filtered = useMemo(() => {
+    const s = dayjs(startDate).valueOf();
+    const e = dayjs(endDate).valueOf();
+    const fByCed = (arr) => arr.filter(r => r.ts_ced >= s && r.ts_ced <= e);
+    const fByDos = (arr) => arr.filter(r => r.ts_dos >= s && r.ts_dos <= e);
+
+    return {
+      fCPD: fByCed(chargesPD), fPPD: fByCed(paymentsPD),
+      fCSD: fByCed(chargesSD), fPSD: fByCed(paymentsSD), fASD: fByCed(adjustmentsSD),
+      fDenials: fByDos(denials)
+    };
+  }, [startDate, endDate, chargesPD, paymentsPD, chargesSD, paymentsSD, adjustmentsSD, denials]);
+
+  const kpis = useMemo(() => {
+    const { fCPD, fPPD, fCSD, fPSD, fASD, fDenials } = filtered;
+    const gBilled = fCPD.reduce((s, r) => s + r.Billed_Amount, 0);
+    const gPaid = fPPD.reduce((s, r) => s + r.Paid_Amount, 0);
+    
+    const nBilled = fCSD.reduce((s, r) => s + r.Billed_Amount, 0);
+    const nPaid = fPSD.reduce((s, r) => s + r.Paid_Amount, 0);
+    const nAdj = fASD.reduce((s, r) => s + r.Adjustment_Amount, 0);
+
+    const denied = fDenials.filter(r => r.Claim_Status?.toLowerCase().trim() === "denied").length;
+
+    return {
+      gcr: gBilled > 0 ? (gPaid / gBilled) * 100 : 0,
+      ncr: (nBilled - nAdj) > 0 ? (nPaid / (nBilled - nAdj)) * 100 : 0,
+      denialRate: fDenials.length > 0 ? (denied / fDenials.length) * 100 : 0,
+      totalPayments: gPaid
+    };
+  }, [filtered]);
+
+  const mainChartData = useMemo(() => {
+    const map = {};
+    const { fCPD, fPPD, fCSD, fPSD, fASD } = filtered;
+    if (selectedMetric === "GCR") {
+      fCPD.forEach(r => { if (!map[r.month]) map[r.month] = { b: 0, p: 0 }; map[r.month].b += r.Billed_Amount; });
+      fPPD.forEach(r => { if (map[r.month]) map[r.month].p += r.Paid_Amount; });
+    } else {
+      fCSD.forEach(r => { if (!map[r.month]) map[r.month] = { b: 0, p: 0, a: 0 }; map[r.month].b += r.Billed_Amount; });
+      fPSD.forEach(r => { if (map[r.month]) map[r.month].p += r.Paid_Amount; });
+      fASD.forEach(r => { if (map[r.month]) map[r.month].a += r.Adjustment_Amount; });
+    }
+    return Object.keys(map).map(m => ({
+      month: m,
+      Avg: selectedMetric === "GCR" ? (map[m].p / map[m].b * 100) : (map[m].p / (map[m].b - map[m].a) * 100),
+      Baseline: CLIENT_PREV_KPIS[selectedClient]?.[`${selectedMetric}_Baseline`] || 0
+    })).sort((a, b) => dayjs(a.month, "MMM YY").unix() - dayjs(b.month, "MMM YY").unix());
+  }, [filtered, selectedMetric, selectedClient]);
+
+  const styles = {
+    container: { fontFamily: "Inter, sans-serif", backgroundColor: "#f9fafb", minHeight: "100vh", padding: "20px" },
+    card: { background: "#fff", borderRadius: "12px", border: "1px solid #e5e7eb", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" },
+    header: { display: "flex", justifyContent: "space-between", marginBottom: "20px", background: "#fff", padding: "16px", borderRadius: "12px" }
+  };
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.header}>
+        <h2 style={{ color: "#1e3a8a", margin: 0 }}>RCM Dashboard</h2>
+        <div style={{ display: "flex", gap: "12px" }}>
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #d1d5db" }} />
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #d1d5db" }} />
+          <select value={selectedClient} onChange={e => setSelectedClient(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #d1d5db" }}>
+            {Object.keys(CLIENT_FOLDERS).map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
+          </select>
+          <DropdownAvatar />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "20px" }}>
+        {[
+          { l: "GCR (Posted Date)", v: kpis.gcr.toFixed(2) + "%", c: "#3b82f6" },
+          { l: "NCR (Service Date)", v: kpis.ncr.toFixed(2) + "%", c: "#10b981" },
+          { l: "Denial Rate", v: kpis.denialRate.toFixed(2) + "%", c: "#ef4444" },
+          { l: "Total Payments", v: "$" + formatCompactNumber(kpis.totalPayments), c: "#8b5cf6" }
+        ].map((k, i) => (
+          <div key={i} style={styles.card}>
+            <div style={{ fontSize: "12px", color: "#6b7280", fontWeight: 600 }}>{k.l}</div>
+            <div style={{ fontSize: "24px", fontWeight: "800", color: k.c }}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "16px" }}>
+        <div style={styles.card}>
+          <SpeedometerGauge label="Efficiency" value={kpis.gcr.toFixed(1)} max={100} color="#3b82f6" suffix="%" />
+        </div>
+        <div style={styles.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
+            <span style={{ fontWeight: 700 }}>Performance Trends</span>
+            <div style={{ background: "#f3f4f6", padding: "2px", borderRadius: "6px" }}>
+              <button onClick={() => setSelectedMetric("GCR")} style={{ border: "none", padding: "4px 10px", borderRadius: "4px", background: selectedMetric === "GCR" ? "#fff" : "transparent", cursor: "pointer" }}>GCR</button>
+              <button onClick={() => setSelectedMetric("NCR")} style={{ border: "none", padding: "4px 10px", borderRadius: "4px", background: selectedMetric === "NCR" ? "#fff" : "transparent", cursor: "pointer" }}>NCR</button>
+            </div>
+          </div>
+          <div style={{ height: "220px" }}>
+            <ResponsiveContainer>
+              <LineChart data={mainChartData}>
+                <CartesianGrid vertical={false} stroke="#f3f4f6" />
+                <XAxis dataKey="month" />
+                <YAxis tickFormatter={v => v + "%"} />
+                <Tooltip />
+                <Line type="monotone" dataKey="Avg" stroke="#2563eb" strokeWidth={3} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="Baseline" stroke="#8b5cf6" strokeDasharray="5 5" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
